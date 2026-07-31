@@ -43,6 +43,7 @@ import quicklink.project.dto.req.QuickLinkPageReqDTO;
 import quicklink.project.dto.req.QuickLinkUpdateReqDTO;
 import quicklink.project.dto.resp.*;
 import quicklink.project.mq.producer.QuickLinkStatsSaveProducer;
+import quicklink.project.service.QuickLinkBloomFilterService;
 import quicklink.project.service.QuickLinkService;
 import quicklink.project.toolkit.HashUtil;
 import quicklink.project.toolkit.LinkUtil;
@@ -57,7 +58,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RReadWriteLock;
 import org.redisson.api.RedissonClient;
@@ -84,7 +84,7 @@ import static quicklink.project.common.constant.RedisKeyConstant.*;
 @RequiredArgsConstructor
 public class QuickLinkServiceImpl extends ServiceImpl<QuickLinkMapper, QuickLinkDO> implements QuickLinkService {
 
-    private final RBloomFilter<String> shortUriCreateCachePenetrationBloomFilter;
+    private final QuickLinkBloomFilterService quickLinkBloomFilterService;
     private final QuickLinkGotoMapper quickLinkGotoMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final RedissonClient redissonClient;
@@ -128,9 +128,9 @@ public class QuickLinkServiceImpl extends ServiceImpl<QuickLinkMapper, QuickLink
             baseMapper.insert(quickLinkDO);
             quickLinkGotoMapper.insert(linkGotoDO);
         } catch (DuplicateKeyException ex) {
-            // 首先判断是否存在布隆过滤器，如果不存在直接新增
-            if (!shortUriCreateCachePenetrationBloomFilter.contains(fullShortUrl)) {
-                shortUriCreateCachePenetrationBloomFilter.add(fullShortUrl);
+            // 数据库唯一键发现短链接重复时，把这个真实存在的地址补入布隆过滤器，修复可能的漏装载。
+            if (!quickLinkBloomFilterService.containsForCreation(fullShortUrl)) {
+                quickLinkBloomFilterService.add(fullShortUrl);
             }
             throw new ServiceException(String.format("短链接：%s 生成重复", fullShortUrl));
         }
@@ -139,7 +139,8 @@ public class QuickLinkServiceImpl extends ServiceImpl<QuickLinkMapper, QuickLink
                 requestParam.getOriginUrl(),
                 LinkUtil.getLinkCacheValidTime(requestParam.getValidDate()), TimeUnit.MILLISECONDS
         );
-        shortUriCreateCachePenetrationBloomFilter.add(fullShortUrl);
+        // 事务提交后加入 active；如果正在重建，管理服务内部还会同步写 target。
+        quickLinkBloomFilterService.addAfterCommit(fullShortUrl);
         return QuickLinkCreateRespDTO.builder()
                 .fullShortUrl("http://" + quickLinkDO.getFullShortUrl())
                 .originUrl(requestParam.getOriginUrl())
@@ -357,8 +358,10 @@ public class QuickLinkServiceImpl extends ServiceImpl<QuickLinkMapper, QuickLink
             ((HttpServletResponse) response).sendRedirect(originalLink);
             return;
         }
-        boolean contains = shortUriCreateCachePenetrationBloomFilter.contains(fullShortUrl);
+        // 缓存未命中后先查布隆过滤器；未就绪或 Redis 异常时该方法返回 true，放行到数据库兜底。
+        boolean contains = quickLinkBloomFilterService.mightContain(fullShortUrl);
         if (!contains) {
+            // active == ready 且布隆过滤器明确返回 false，说明该地址一定没有被写入过，直接返回 404。
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
@@ -480,7 +483,8 @@ public class QuickLinkServiceImpl extends ServiceImpl<QuickLinkMapper, QuickLink
             String originUrl = requestParam.getOriginUrl();
             originUrl += UUID.randomUUID().toString();
             shorUri = HashUtil.hashToBase62(originUrl);
-            if (!shortUriCreateCachePenetrationBloomFilter.contains(createQuickLinkDefaultDomain + "/" + shorUri)) {
+            // 布隆过滤器未发现候选完整短链接时采用该后缀；误判或 Redis 异常最终由数据库唯一键兜底。
+            if (!quickLinkBloomFilterService.containsForCreation(createQuickLinkDefaultDomain + "/" + shorUri)) {
                 break;
             }
             customGenerateCount++;

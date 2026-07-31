@@ -91,4 +91,22 @@ public class RedisKeyConstant {
      * IP 地理位置短期缓存
      */
     public static final String QUICK_LINK_STATS_LOCALE_KEY = "quick-link:stats:locale:%s";
+
+    /** String：当前提供查询服务的过滤器名称，例如 quick-link:bloom:v1。 */
+    public static final String QUICK_LINK_BLOOM_ACTIVE_KEY = "quick-link:bloom:active";
+
+    /** String：已经完成数据库全量装载的过滤器名称；只有 active == ready 才能安全返回“不存在”。 */
+    public static final String QUICK_LINK_BLOOM_READY_KEY = "quick-link:bloom:ready";
+
+    /** String：正在重建的过滤器名称；存在该值时，新建短链接需要同时写入 active 和 rebuilding。 */
+    public static final String QUICK_LINK_BLOOM_REBUILDING_KEY = "quick-link:bloom:rebuilding";
+
+    /** ZSet：成员是退役过滤器名称，分数是最早允许物理删除的毫秒时间戳。 */
+    public static final String QUICK_LINK_BLOOM_RETIRED_ZSET_KEY = "quick-link:bloom:retired";
+
+    /** String：最近一次成功切换的毫秒时间戳，用于避免多实例短时间重复重建。 */
+    public static final String QUICK_LINK_BLOOM_LAST_REBUILD_KEY = "quick-link:bloom:last-rebuild";
+
+    /** Redisson Lock：同一时刻只允许一个服务实例执行布隆过滤器全量重建。 */
+    public static final String LOCK_QUICK_LINK_BLOOM_REBUILD_KEY = "quick-link:lock:bloom:rebuild";
 }

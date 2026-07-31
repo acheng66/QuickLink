@@ -18,6 +18,8 @@
 package quicklink.project.dao.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import quicklink.project.common.database.BaseDO;
 import lombok.AllArgsConstructor;
@@ -38,8 +40,9 @@ import java.util.Date;
 public class QuickLinkDO extends BaseDO {
 
     /**
-     * id
+     * 全局雪花 ID。显式指定生成策略，避免不同物理分表混入各自的 AUTO_INCREMENT ID。
      */
+    @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
     /**

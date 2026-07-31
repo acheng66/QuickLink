@@ -39,6 +39,25 @@ spring:
         max-concurrency: 5
 
 quick-link:
+  bloom-filter:
+    # 单个 v1/v2 过滤器预计最多容纳 1 亿条短链接，超过后误判率会逐渐升高。
+    expected-insertions: 100000000
+    # 允许约 0.1% 的假阳性；布隆过滤器返回 true 后仍会由缓存和数据库确认。
+    false-probability: 0.001
+    # 重建时每次从数据库按主键游标读取 1000 条，避免一次加载全部数据。
+    rebuild-batch-size: 1000
+    # 服务启动 5 秒后进行第一次重建，给 Redis、数据库和应用上下文预留启动时间。
+    rebuild-initial-delay-millis: 5000
+    # 每次任务结束 24 小时后再次重建，用于清理删除、禁用和过期短链接。
+    rebuild-interval-millis: 86400000
+    # 12 小时内已有其他实例成功重建时跳过本次任务，避免多实例重复扫描数据库。
+    minimum-rebuild-interval-millis: 43200000
+    # active 切换后旧过滤器保留 5 分钟，再允许清理任务物理删除。
+    retire-delay-millis: 300000
+    # 服务启动 60 秒后第一次检查退役过滤器，避免与首次重建同时争抢资源。
+    cleanup-initial-delay-millis: 60000
+    # 之后每 60 秒检查一次 retired ZSet，删除已经超过安全保留期的旧版本。
+    cleanup-interval-millis: 60000
   domain:
     default: localhost:8001
   stats:
