@@ -17,222 +17,138 @@
 
 package quicklink.project.mq.consumer;
 
-import cn.hutool.core.date.DateUtil;
-import cn.hutool.core.date.Week;
-import cn.hutool.core.util.StrUtil;
-import cn.hutool.http.HttpUtil;
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import quicklink.project.common.convention.exception.ServiceException;
-import quicklink.project.dao.entity.LinkAccessLogsDO;
-import quicklink.project.dao.entity.LinkAccessStatsDO;
-import quicklink.project.dao.entity.LinkBrowserStatsDO;
-import quicklink.project.dao.entity.LinkDeviceStatsDO;
-import quicklink.project.dao.entity.LinkLocaleStatsDO;
-import quicklink.project.dao.entity.LinkNetworkStatsDO;
-import quicklink.project.dao.entity.LinkOsStatsDO;
-import quicklink.project.dao.entity.LinkStatsTodayDO;
-import quicklink.project.dao.entity.QuickLinkGotoDO;
-import quicklink.project.dao.mapper.LinkAccessLogsMapper;
-import quicklink.project.dao.mapper.LinkAccessStatsMapper;
-import quicklink.project.dao.mapper.LinkBrowserStatsMapper;
-import quicklink.project.dao.mapper.LinkDeviceStatsMapper;
-import quicklink.project.dao.mapper.LinkLocaleStatsMapper;
-import quicklink.project.dao.mapper.LinkNetworkStatsMapper;
-import quicklink.project.dao.mapper.LinkOsStatsMapper;
-import quicklink.project.dao.mapper.LinkStatsTodayMapper;
-import quicklink.project.dao.mapper.QuickLinkGotoMapper;
-import quicklink.project.dao.mapper.QuickLinkMapper;
-import quicklink.project.dto.biz.QuickLinkStatsRecordDTO;
-import quicklink.project.mq.idempotent.MessageQueueIdempotentHandler;
 import com.rabbitmq.client.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RLock;
-import org.redisson.api.RReadWriteLock;
-import org.redisson.api.RedissonClient;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import quicklink.project.dto.biz.QuickLinkStatsRecordDTO;
+import quicklink.project.mq.producer.QuickLinkStatsSaveProducer;
+import quicklink.project.service.QuickLinkStatsLocationService;
+import quicklink.project.service.QuickLinkStatsPersistService;
 
 import java.io.IOException;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_QUEUE;
-import static quicklink.project.common.constant.RedisKeyConstant.LOCK_GID_UPDATE_KEY;
-import static quicklink.project.common.constant.QuickLinkConstant.AMAP_REMOTE_URL;
+import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_RETRY_HEADER;
 
 /**
- * 短链接监控状态保存消息队列消费者（RabbitMQ 实现）
- * 可靠性保障：
- *   1. 手动 ACK：消费成功后才 ack，异常时 nack 重回队列
- *   2. 幂等性：基于 Redis 记录 messageId 状态，防止重复消费
- *   3. 死信队列：消息多次 nack 后投递到 DLX，避免无限重试
+ * 短链接统计批量消费者。
+ *
+ * <p>可靠性策略：
+ * 1. 数据库消费记录唯一键提供最终幂等；
+ * 2. 消费记录和全部统计写入处于同一事务；
+ * 3. 批量失败后降级为逐条处理，隔离毒消息；
+ * 4. 有限延迟重试，超过上限后拒绝并进入 DLX。
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class QuickLinkStatsSaveConsumer {
 
-    private final QuickLinkMapper quickLinkMapper;
-    private final QuickLinkGotoMapper quickLinkGotoMapper;
-    private final RedissonClient redissonClient;
-    private final LinkAccessStatsMapper linkAccessStatsMapper;
-    private final LinkLocaleStatsMapper linkLocaleStatsMapper;
-    private final LinkOsStatsMapper linkOsStatsMapper;
-    private final LinkBrowserStatsMapper linkBrowserStatsMapper;
-    private final LinkAccessLogsMapper linkAccessLogsMapper;
-    private final LinkDeviceStatsMapper linkDeviceStatsMapper;
-    private final LinkNetworkStatsMapper linkNetworkStatsMapper;
-    private final LinkStatsTodayMapper linkStatsTodayMapper;
-    private final MessageQueueIdempotentHandler messageQueueIdempotentHandler;
+    private final QuickLinkStatsPersistService quickLinkStatsPersistService;
+    private final QuickLinkStatsLocationService quickLinkStatsLocationService;
+    private final QuickLinkStatsSaveProducer quickLinkStatsSaveProducer;
+    private final Jackson2JsonMessageConverter messageConverter;
 
-    @Value("${quick-link.stats.locale.amap-key}")
-    private String statsLocaleAmapKey;
+    @Value("${quick-link.stats.mq.max-retry-count:3}")
+    private Integer maxRetryCount;
 
-    /**
-     * 消费短链接统计消息
-     * containerFactory 与 RabbitMQConfiguration 中声明的 Bean 名称一致
-     */
     @RabbitListener(queues = QUICK_LINK_STATS_QUEUE, containerFactory = "rabbitListenerContainerFactory")
-    public void onMessage(QuickLinkStatsRecordDTO statsRecord, Message message, Channel channel) throws IOException {
-        long deliveryTag = message.getMessageProperties().getDeliveryTag();
-        String messageId = statsRecord.getKeys();
-
-        // ===== 幂等校验 =====
-        if (messageQueueIdempotentHandler.isMessageBeingConsumed(messageId)) {
-            // Key 已存在：要么正在处理，要么已完成
-            if (messageQueueIdempotentHandler.isAccomplish(messageId)) {
-                // 已消费完成，直接 ack 丢弃重复消息
-                channel.basicAck(deliveryTag, false);
-                return;
+    public void onMessage(List<Message> messages, Channel channel) throws IOException {
+        List<Message> validMessages = new ArrayList<>(messages.size());
+        List<QuickLinkStatsRecordDTO> records = new ArrayList<>(messages.size());
+        for (Message message : messages) {
+            try {
+                QuickLinkStatsRecordDTO record = convertAndEnrich(message);
+                validMessages.add(message);
+                records.add(record);
+            } catch (Throwable ex) {
+                log.error("[RabbitMQ] 统计消息格式非法，直接投入死信队列 deliveryTag={}",
+                        message.getMessageProperties().getDeliveryTag(), ex);
+                channel.basicNack(message.getMessageProperties().getDeliveryTag(), false, false);
             }
-            // 未完成（可能上次处理到一半宕机），nack 让消息重回队列重试
-            channel.basicNack(deliveryTag, false, true);
-            throw new ServiceException("消息未完成流程，需要消息队列重试");
         }
-
-        // ===== 正常消费 =====
-        try {
-            actualSaveQuickLinkStats(statsRecord);
-        } catch (Throwable ex) {
-            // 删除幂等 Key，允许消息重试
-            messageQueueIdempotentHandler.delMessageProcessed(messageId);
-            log.error("[RabbitMQ] 记录短链接监控消费异常 messageId={}", messageId, ex);
-            // nack，requeue=true 重回队列；达到死信阈值后会进入 DLX
-            channel.basicNack(deliveryTag, false, true);
+        if (records.isEmpty()) {
             return;
         }
-
-        // 标记幂等完成
-        messageQueueIdempotentHandler.setAccomplish(messageId);
-        // 手动 ack
-        channel.basicAck(deliveryTag, false);
+        try {
+            quickLinkStatsPersistService.saveBatch(records);
+            acknowledgeBatch(validMessages, channel);
+        } catch (Throwable batchException) {
+            log.warn("[RabbitMQ] 批量统计写入失败，降级为逐条处理，batchSize={}", records.size(), batchException);
+            processIndividually(validMessages, records, channel);
+        }
     }
 
-    public void actualSaveQuickLinkStats(QuickLinkStatsRecordDTO statsRecord) {
-        String fullShortUrl = statsRecord.getFullShortUrl();
-        RReadWriteLock readWriteLock = redissonClient.getReadWriteLock(String.format(LOCK_GID_UPDATE_KEY, fullShortUrl));
-        RLock rLock = readWriteLock.readLock();
-        rLock.lock();
-        try {
-            LambdaQueryWrapper<QuickLinkGotoDO> queryWrapper = Wrappers.lambdaQuery(QuickLinkGotoDO.class)
-                    .eq(QuickLinkGotoDO::getFullShortUrl, fullShortUrl);
-            QuickLinkGotoDO quickLinkGotoDO = quickLinkGotoMapper.selectOne(queryWrapper);
-            String gid = quickLinkGotoDO.getGid();
-            Date currentDate = statsRecord.getCurrentDate();
-            int hour = DateUtil.hour(currentDate, true);
-            Week week = DateUtil.dayOfWeekEnum(currentDate);
-            int weekValue = week.getIso8601Value();
-            LinkAccessStatsDO linkAccessStatsDO = LinkAccessStatsDO.builder()
-                    .pv(1)
-                    .uv(statsRecord.getUvFirstFlag() ? 1 : 0)
-                    .uip(statsRecord.getUipFirstFlag() ? 1 : 0)
-                    .hour(hour)
-                    .weekday(weekValue)
-                    .fullShortUrl(fullShortUrl)
-                    .date(currentDate)
-                    .build();
-            linkAccessStatsMapper.quickLinkStats(linkAccessStatsDO);
-            Map<String, Object> localeParamMap = new HashMap<>();
-            localeParamMap.put("key", statsLocaleAmapKey);
-            localeParamMap.put("ip", statsRecord.getRemoteAddr());
-            String localeResultStr = HttpUtil.get(AMAP_REMOTE_URL, localeParamMap);
-            JSONObject localeResultObj = JSON.parseObject(localeResultStr);
-            String infoCode = localeResultObj.getString("infocode");
-            String actualProvince = "未知";
-            String actualCity = "未知";
-            if (StrUtil.isNotBlank(infoCode) && StrUtil.equals(infoCode, "10000")) {
-                String province = localeResultObj.getString("province");
-                boolean unknownFlag = StrUtil.equals(province, "[]");
-                LinkLocaleStatsDO linkLocaleStatsDO = LinkLocaleStatsDO.builder()
-                        .province(actualProvince = unknownFlag ? actualProvince : province)
-                        .city(actualCity = unknownFlag ? actualCity : localeResultObj.getString("city"))
-                        .adcode(unknownFlag ? "未知" : localeResultObj.getString("adcode"))
-                        .cnt(1)
-                        .fullShortUrl(fullShortUrl)
-                        .country("中国")
-                        .date(currentDate)
-                        .build();
-                linkLocaleStatsMapper.quickLinkLocaleState(linkLocaleStatsDO);
+    private QuickLinkStatsRecordDTO convertAndEnrich(Message message) {
+        Object converted = messageConverter.fromMessage(message);
+        if (!(converted instanceof QuickLinkStatsRecordDTO record)) {
+            throw new IllegalArgumentException("无法解析短链接统计消息");
+        }
+        // 外部地理位置请求在事务和读锁之外执行，失败时使用“未知”兜底。
+        quickLinkStatsLocationService.enrich(record);
+        return record;
+    }
+
+    private void processIndividually(
+            List<Message> messages,
+            List<QuickLinkStatsRecordDTO> records,
+            Channel channel) throws IOException {
+        for (int i = 0; i < messages.size(); i++) {
+            Message message = messages.get(i);
+            QuickLinkStatsRecordDTO record = records.get(i);
+            long deliveryTag = message.getMessageProperties().getDeliveryTag();
+            try {
+                quickLinkStatsPersistService.saveBatch(List.of(record));
+                channel.basicAck(deliveryTag, false);
+            } catch (Throwable ex) {
+                handleFailure(message, record, channel, ex);
             }
-            LinkOsStatsDO linkOsStatsDO = LinkOsStatsDO.builder()
-                    .os(statsRecord.getOs())
-                    .cnt(1)
-                    .fullShortUrl(fullShortUrl)
-                    .date(currentDate)
-                    .build();
-            linkOsStatsMapper.quickLinkOsState(linkOsStatsDO);
-            LinkBrowserStatsDO linkBrowserStatsDO = LinkBrowserStatsDO.builder()
-                    .browser(statsRecord.getBrowser())
-                    .cnt(1)
-                    .fullShortUrl(fullShortUrl)
-                    .date(currentDate)
-                    .build();
-            linkBrowserStatsMapper.quickLinkBrowserState(linkBrowserStatsDO);
-            LinkDeviceStatsDO linkDeviceStatsDO = LinkDeviceStatsDO.builder()
-                    .device(statsRecord.getDevice())
-                    .cnt(1)
-                    .fullShortUrl(fullShortUrl)
-                    .date(currentDate)
-                    .build();
-            linkDeviceStatsMapper.quickLinkDeviceState(linkDeviceStatsDO);
-            LinkNetworkStatsDO linkNetworkStatsDO = LinkNetworkStatsDO.builder()
-                    .network(statsRecord.getNetwork())
-                    .cnt(1)
-                    .fullShortUrl(fullShortUrl)
-                    .date(currentDate)
-                    .build();
-            linkNetworkStatsMapper.quickLinkNetworkState(linkNetworkStatsDO);
-            LinkAccessLogsDO linkAccessLogsDO = LinkAccessLogsDO.builder()
-                    .user(statsRecord.getUv())
-                    .ip(statsRecord.getRemoteAddr())
-                    .browser(statsRecord.getBrowser())
-                    .os(statsRecord.getOs())
-                    .network(statsRecord.getNetwork())
-                    .device(statsRecord.getDevice())
-                    .locale(StrUtil.join("-", "中国", actualProvince, actualCity))
-                    .fullShortUrl(fullShortUrl)
-                    .build();
-            linkAccessLogsMapper.insert(linkAccessLogsDO);
-            quickLinkMapper.incrementStats(gid, fullShortUrl, 1,
-                    statsRecord.getUvFirstFlag() ? 1 : 0,
-                    statsRecord.getUipFirstFlag() ? 1 : 0);
-            LinkStatsTodayDO linkStatsTodayDO = LinkStatsTodayDO.builder()
-                    .todayPv(1)
-                    .todayUv(statsRecord.getUvFirstFlag() ? 1 : 0)
-                    .todayUip(statsRecord.getUipFirstFlag() ? 1 : 0)
-                    .fullShortUrl(fullShortUrl)
-                    .date(currentDate)
-                    .build();
-            linkStatsTodayMapper.quickLinkTodayState(linkStatsTodayDO);
-        } finally {
-            rLock.unlock();
+        }
+    }
+
+    private void handleFailure(
+            Message message,
+            QuickLinkStatsRecordDTO record,
+            Channel channel,
+            Throwable exception) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        int currentRetryCount = getRetryCount(message);
+        if (currentRetryCount >= maxRetryCount) {
+            log.error("[RabbitMQ] 统计消息超过最大重试次数，投入死信队列 messageId={} retryCount={}",
+                    record.getKeys(), currentRetryCount, exception);
+            // 业务队列绑定了 DLX，requeue=false 后消息会进入死信队列。
+            channel.basicNack(deliveryTag, false, false);
+            return;
+        }
+        int nextRetryCount = currentRetryCount + 1;
+        boolean retryPublished = quickLinkStatsSaveProducer.sendRetry(record, nextRetryCount);
+        if (retryPublished) {
+            // 重试副本已被 Broker 确认，安全确认原消息。
+            channel.basicAck(deliveryTag, false);
+            log.warn("[RabbitMQ] 统计消息已进入延迟重试队列 messageId={} retryCount={}",
+                    record.getKeys(), nextRetryCount, exception);
+        } else {
+            // 重试消息未被确认，保留原消息，避免丢失。
+            channel.basicNack(deliveryTag, false, true);
+        }
+    }
+
+    private int getRetryCount(Message message) {
+        Object retryCount = message.getMessageProperties().getHeaders().get(QUICK_LINK_STATS_RETRY_HEADER);
+        return retryCount instanceof Number number ? number.intValue() : 0;
+    }
+
+    private void acknowledgeBatch(List<Message> messages, Channel channel) throws IOException {
+        // 逐条确认，避免同批中的非法消息已 Nack 后又被 multiple=true 重复确认。
+        for (Message message : messages) {
+            channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
         }
     }
 }

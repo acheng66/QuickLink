@@ -38,6 +38,26 @@ public class RabbitMQConstant {
     public static final String QUICK_LINK_STATS_ROUTING_KEY = "quick-link.stats.routing-key";
 
     /**
+     * 统计消息延迟重试 Exchange
+     */
+    public static final String QUICK_LINK_STATS_RETRY_EXCHANGE = "quick-link.stats.retry.exchange";
+
+    /**
+     * 统计消息延迟重试队列
+     */
+    public static final String QUICK_LINK_STATS_RETRY_QUEUE = "quick-link.stats.retry.queue";
+
+    /**
+     * 统计消息延迟重试路由键
+     */
+    public static final String QUICK_LINK_STATS_RETRY_ROUTING_KEY = "quick-link.stats.retry.routing-key";
+
+    /**
+     * 消息当前重试次数 Header
+     */
+    public static final String QUICK_LINK_STATS_RETRY_HEADER = "quick-link-stats-retry-count";
+
+    /**
      * 死信 Exchange
      */
     public static final String QUICK_LINK_STATS_DLX_EXCHANGE = "quick-link.stats.dlx.exchange";

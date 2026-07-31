@@ -71,4 +71,24 @@ public class RedisKeyConstant {
      * 创建短链接锁标识
      */
     public static final String QUICK_LINK_CREATE_LOCK_KEY = "quick-link:lock:create";
+
+    /**
+     * 尚未收到 Broker Confirm 的统计消息
+     */
+    public static final String QUICK_LINK_STATS_PENDING_HASH_KEY = "quick-link:stats:pending:payload";
+
+    /**
+     * 尚未收到 Broker Confirm 的统计消息重试时间
+     */
+    public static final String QUICK_LINK_STATS_PENDING_ZSET_KEY = "quick-link:stats:pending:schedule";
+
+    /**
+     * 生产者补偿任务分布式锁
+     */
+    public static final String LOCK_QUICK_LINK_STATS_PENDING_KEY = "quick-link:lock:stats:pending";
+
+    /**
+     * IP 地理位置短期缓存
+     */
+    public static final String QUICK_LINK_STATS_LOCALE_KEY = "quick-link:stats:locale:%s";
 }

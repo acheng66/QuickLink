@@ -28,12 +28,16 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_DLX_EXCHANGE;
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_DLX_QUEUE;
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_DLX_ROUTING_KEY;
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_EXCHANGE;
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_QUEUE;
+import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_RETRY_EXCHANGE;
+import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_RETRY_QUEUE;
+import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_RETRY_ROUTING_KEY;
 import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STATS_ROUTING_KEY;
 
 /**
@@ -41,6 +45,7 @@ import static quicklink.project.common.constant.RabbitMQConstant.QUICK_LINK_STAT
  * 声明 Exchange、Queue、Binding 及死信队列（DLX），并配置消息转换器和发送确认
  */
 @Configuration
+@EnableScheduling
 public class RabbitMQConfiguration {
 
     // ======================== 消息转换器 ========================
@@ -81,10 +86,39 @@ public class RabbitMQConfiguration {
         // 手动 ACK
         factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
         // 每次拉取的消息数，防止消费者过载
-        factory.setPrefetchCount(10);
+        // Prefetch 至少覆盖一个批次，避免 batchSize=50 时只能拿到 10 条。
+        factory.setPrefetchCount(100);
         factory.setConcurrentConsumers(1);
         factory.setMaxConcurrentConsumers(5);
+        // 50 条或等待 1 秒形成一个消费批次，交由事务服务聚合写入。
+        factory.setBatchListener(true);
+        factory.setConsumerBatchEnabled(true);
+        factory.setBatchSize(50);
+        factory.setReceiveTimeout(1000L);
         return factory;
+    }
+
+    // ======================== 延迟重试 Exchange & Queue ========================
+
+    @Bean
+    public DirectExchange quickLinkStatsRetryExchange() {
+        return new DirectExchange(QUICK_LINK_STATS_RETRY_EXCHANGE, true, false);
+    }
+
+    @Bean
+    public Queue quickLinkStatsRetryQueue() {
+        // 消息使用各自 expiration；到期后重新进入业务 Exchange。
+        return QueueBuilder.durable(QUICK_LINK_STATS_RETRY_QUEUE)
+                .withArgument("x-dead-letter-exchange", QUICK_LINK_STATS_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", QUICK_LINK_STATS_ROUTING_KEY)
+                .build();
+    }
+
+    @Bean
+    public Binding quickLinkStatsRetryBinding() {
+        return BindingBuilder.bind(quickLinkStatsRetryQueue())
+                .to(quickLinkStatsRetryExchange())
+                .with(QUICK_LINK_STATS_RETRY_ROUTING_KEY);
     }
 
     // ======================== 死信 Exchange & Queue ========================

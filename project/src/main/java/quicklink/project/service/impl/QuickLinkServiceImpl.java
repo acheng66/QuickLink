@@ -461,8 +461,13 @@ public class QuickLinkServiceImpl extends ServiceImpl<QuickLinkMapper, QuickLink
 
     @Override
     public void quickLinkStats(QuickLinkStatsRecordDTO statsRecord) {
-        // 消息队列使用 RabbitMQ，直接发送 DTO，由 Producer 负责分配 messageId
-        quickLinkStatsSaveProducer.send(statsRecord);
+        try {
+            // 访问统计属于旁路能力，RabbitMQ 或补偿缓存异常不能阻断核心 302 跳转。
+            quickLinkStatsSaveProducer.send(statsRecord);
+        } catch (Throwable ex) {
+            log.error("发送短链接统计消息失败，不影响跳转，fullShortUrl={}",
+                    statsRecord.getFullShortUrl(), ex);
+        }
     }
 
     private String generateSuffix(QuickLinkCreateReqDTO requestParam) {

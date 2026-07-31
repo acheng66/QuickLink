@@ -87,4 +87,24 @@ public class QuickLinkStatsRecordDTO {
      * 当前时间
      */
     private Date currentDate;
+
+    /**
+     * IP 所属国家
+     */
+    private String country;
+
+    /**
+     * IP 所属省份
+     */
+    private String province;
+
+    /**
+     * IP 所属城市
+     */
+    private String city;
+
+    /**
+     * IP 所属行政区编码
+     */
+    private String adcode;
 }

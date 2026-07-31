@@ -26,6 +26,7 @@ import quicklink.project.dto.req.QuickLinkGroupStatsReqDTO;
 import quicklink.project.dto.req.QuickLinkStatsReqDTO;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Insert;
 
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +36,21 @@ import java.util.Map;
  * 访问日志监控持久层
  */
 public interface LinkAccessLogsMapper extends BaseMapper<LinkAccessLogsDO> {
+
+    /**
+     * 批量写入访问明细，减少逐条插入的数据库往返。
+     */
+    @Insert({
+            "<script>",
+            "INSERT INTO t_link_access_logs ",
+            "(full_short_url, user, browser, os, ip, network, device, locale, create_time, update_time, del_flag) VALUES ",
+            "<foreach collection='records' item='item' separator=','>",
+            "(#{item.fullShortUrl}, #{item.user}, #{item.browser}, #{item.os}, #{item.ip}, ",
+            "#{item.network}, #{item.device}, #{item.locale}, #{item.createTime}, #{item.updateTime}, #{item.delFlag})",
+            "</foreach>",
+            "</script>"
+    })
+    int insertBatch(@Param("records") List<LinkAccessLogsDO> records);
 
     /**
      * 根据短链接获取指定日期内高频访问IP数据

@@ -47,6 +47,11 @@ quick-link:
   stats:
     locale:
       amap-key: 824c511f0997586ea016f979fdb23087
+      timeout-millis: 1500
+    mq:
+      max-retry-count: 3
+      retry-delay-millis: 5000
+      publisher-retry-interval-millis: 5000
   goto-domain:
     white-list:
       enable: false
