@@ -1,0 +1,21 @@
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: quick-link-admin
+          uri: lb://quick-link-admin/api/quick-link/admin/**
+          predicates:
+            - Path=/api/quick-link/admin/**
+          filters:
+            - name: TokenValidate
+              args:
+                whitePathList:
+                  - /api/quick-link/admin/v1/user/login
+                  - /api/quick-link/admin/v1/user/has-username
+
+        - id: quick-link-project
+          uri: lb://quick-link-project/api/quick-link/**
+          predicates:
+            - Path=/api/quick-link/**
+          filters:
+            - name: TokenValidate

@@ -1,0 +1,71 @@
+server:
+  port: 8003
+
+spring:
+  application:
+    name: quick-link-aggregation
+  datasource:
+    driver-class-name: org.apache.shardingsphere.driver.ShardingSphereDriver
+    url: jdbc:shardingsphere:classpath:shardingsphere-config-${database.env:dev}.yaml
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  mvc:
+    view:
+      prefix: /templates/
+      suffix: .html
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+
+aggregation:
+  remote-url: http://127.0.0.1:${server.port}
+
+quick-link:
+  group:
+    max-num: 20
+  flow-limit:
+    enable: true
+    time-window: 1
+    max-access-count: 20
+  domain:
+    default: localhost:8003
+  demo-mode:
+    enable: false
+    blacklist:
+      - /api/quick-link/admin/v1/group
+      - /api/quick-link/admin/v1/recycle-bin/remove
+      - /api/quick-link/admin/v1/create
+      - /api/quick-link/admin/v1/create/batch
+      - /api/quick-link/admin/v1/update
+      - /api/quick-link/admin/v1/user
+      - /api/quick-link/admin/v1/user/logout
+      - /api/quick-link/admin/v1/recycle-bin/save
+  stats:
+    locale:
+      amap-key: 824c511f0997586ea016f979fdb23087
+  goto-domain:
+    white-list:
+      enable: false
+      names: '知乎,掘金,博客园'
+      details:
+        - zhihu.com
+        - juejin.cn
+        - cnblogs.com
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  mapper-locations: classpath:mapper/*.xml
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  metrics:
+    tags:
+      application: ${spring.application.name}
