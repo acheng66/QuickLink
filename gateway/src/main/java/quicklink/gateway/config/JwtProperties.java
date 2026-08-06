@@ -15,21 +15,18 @@
  * limitations under the License.
  */
 
-package quicklink.admin.common.constant;
+package quicklink.gateway.config;
 
-/**
- * 短链接后管 Redis 缓存常量类
- */
-public class RedisCacheConstant {
+import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
 
-    /**
-     * 用户注册分布式锁
-     */
-    public static final String LOCK_USER_REGISTER_KEY = "quick-link:lock_user-register:";
+@Data
+@Component
+@ConfigurationProperties(prefix = "quick-link.jwt")
+public class JwtProperties {
 
-    /**
-     * 分组创建分布式锁
-     */
-    public static final String LOCK_GROUP_CREATE_KEY = "quick-link:lock_group-create:%s";
+    private String secret;
 
+    private String issuer;
 }

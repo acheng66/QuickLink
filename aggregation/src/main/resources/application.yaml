@@ -25,6 +25,12 @@ aggregation:
   remote-url: http://127.0.0.1:${server.port}
 
 quick-link:
+  jwt:
+    # 聚合模式会把 admin 模块加载到当前应用中，因此这里也必须提供 JWT 签发配置。
+    # 必须与 gateway 使用同一密钥；生产环境通过 QUICK_LINK_JWT_SECRET 覆盖。
+    secret: ${QUICK_LINK_JWT_SECRET:change-this-development-jwt-secret-before-production}
+    issuer: quick-link
+    expiration: 30m
   bloom-filter:
     # 单个 v1/v2 过滤器预计最多容纳 1 亿条短链接，超过后误判率会逐渐升高。
     expected-insertions: 100000000

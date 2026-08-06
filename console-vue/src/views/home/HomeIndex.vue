@@ -63,7 +63,7 @@
 <script setup>
 import { ref, getCurrentInstance, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { removeKey, removeUsername, getToken, getUsername } from '@/core/auth.js'
+import { removeKey, removeUsername, getUsername } from '@/core/auth.js'
 import { ElMessage } from 'element-plus'
 const { proxy } = getCurrentInstance()
 const API = proxy.$API
@@ -74,10 +74,8 @@ const toMine = () => {
 }
 // 登出
 const logout = async () => {
-  const token = getToken()
-  const username = getUsername()
   // 请求登出的接口
-  await API.user.logout({ token, username })
+  await API.user.logout()
   // 删除cookies中的token和username
   removeUsername()
   removeKey()

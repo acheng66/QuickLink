@@ -72,7 +72,7 @@ public interface UserService extends IService<UserDO> {
      * 检查用户是否登录
      *
      * @param username 用户名
-     * @param token    用户登录 Token
+     * @param token    JWT
      * @return 用户是否登录标识
      */
     Boolean checkLogin(String username, String token);
@@ -80,8 +80,7 @@ public interface UserService extends IService<UserDO> {
     /**
      * 退出登录
      *
-     * @param username 用户名
-     * @param token    用户登录 Token
+     * JWT 为无状态凭据，服务端不保存会话；退出时由客户端删除本地 Token。
      */
-    void logout(String username, String token);
+    void logout();
 }

@@ -18,6 +18,11 @@ spring:
         server-addr: 127.0.0.1:8848
 
 quick-link:
+  jwt:
+    # 生产环境必须通过 QUICK_LINK_JWT_SECRET 覆盖；密钥至少 32 字节。
+    secret: ${QUICK_LINK_JWT_SECRET:change-this-development-jwt-secret-before-production}
+    issuer: quick-link
+    expiration: 30m
   group:
     max-num: 20
   flow-limit:

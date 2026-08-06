@@ -14,3 +14,9 @@ spring:
     nacos:
       discovery:
         server-addr: 127.0.0.1:8848
+
+quick-link:
+  jwt:
+    # 必须与 admin 服务使用同一密钥；生产环境通过 QUICK_LINK_JWT_SECRET 配置。
+    secret: ${QUICK_LINK_JWT_SECRET:change-this-development-jwt-secret-before-production}
+    issuer: quick-link

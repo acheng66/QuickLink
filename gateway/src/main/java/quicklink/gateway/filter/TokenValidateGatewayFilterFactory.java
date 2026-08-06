@@ -18,13 +18,17 @@
 package quicklink.gateway.filter;
 
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.security.Keys;
 import quicklink.gateway.config.Config;
 import quicklink.gateway.dto.GatewayErrorResult;
+import quicklink.gateway.config.JwtProperties;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
 import org.springframework.core.io.buffer.DataBufferFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
@@ -35,20 +39,21 @@ import reactor.core.publisher.Mono;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.Key;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * SpringCloud Gateway Token 拦截器
+ * SpringCloud Gateway JWT 拦截器
  */
 @Component
 public class TokenValidateGatewayFilterFactory extends AbstractGatewayFilterFactory<Config> {
 
-    private final StringRedisTemplate stringRedisTemplate;
+    private final JwtProperties jwtProperties;
 
-    public TokenValidateGatewayFilterFactory(StringRedisTemplate stringRedisTemplate) {
+    public TokenValidateGatewayFilterFactory(JwtProperties jwtProperties) {
         super(Config.class);
-        this.stringRedisTemplate = stringRedisTemplate;
+        this.jwtProperties = jwtProperties;
     }
 
     @Override
@@ -58,14 +63,15 @@ public class TokenValidateGatewayFilterFactory extends AbstractGatewayFilterFact
             String requestPath = request.getPath().toString();
             String requestMethod = request.getMethod().name();
             if (!isPathInWhiteList(requestPath, requestMethod, config.getWhitePathList())) {
-                String username = request.getHeaders().getFirst("username");
-                String token = request.getHeaders().getFirst("token");
-                Object userInfo;
-                if (StringUtils.hasText(username) && StringUtils.hasText(token) && (userInfo = stringRedisTemplate.opsForHash().get("quick-link:login:" + username, token)) != null) {
-                    JSONObject userInfoJsonObject = JSON.parseObject(userInfo.toString());
+                Claims claims = parseToken(request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+                if (claims != null && StringUtils.hasText(claims.getSubject()) && claims.get("userId") != null) {
                     ServerHttpRequest.Builder builder = exchange.getRequest().mutate().headers(httpHeaders -> {
-                        httpHeaders.set("userId", userInfoJsonObject.getString("id"));
-                        httpHeaders.set("realName", URLEncoder.encode(userInfoJsonObject.getString("realName"), StandardCharsets.UTF_8));
+                        // 身份头只允许由网关根据已验签的 JWT 写入，不能信任客户端同名请求头。
+                        httpHeaders.remove(HttpHeaders.AUTHORIZATION);
+                        httpHeaders.remove("token");
+                        httpHeaders.set("username", claims.getSubject());
+                        httpHeaders.set("userId", claims.get("userId").toString());
+                        httpHeaders.set("realName", URLEncoder.encode(Objects.toString(claims.get("realName"), ""), StandardCharsets.UTF_8));
                     });
                     return chain.filter(exchange.mutate().request(builder.build()).build());
                 }
@@ -75,13 +81,37 @@ public class TokenValidateGatewayFilterFactory extends AbstractGatewayFilterFact
                     DataBufferFactory bufferFactory = response.bufferFactory();
                     GatewayErrorResult resultMessage = GatewayErrorResult.builder()
                             .status(HttpStatus.UNAUTHORIZED.value())
-                            .message("Token validation error")
+                            .message("JWT validation error")
                             .build();
                     return bufferFactory.wrap(JSON.toJSONString(resultMessage).getBytes());
                 }));
             }
             return chain.filter(exchange);
         };
+    }
+
+    private Claims parseToken(String authorization) {
+        if (!StringUtils.hasText(authorization) || !authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            return null;
+        }
+        String token = authorization.substring(7).trim();
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+        try {
+            return Jwts.parserBuilder()
+                    .requireIssuer(jwtProperties.getIssuer())
+                    .setSigningKey(signingKey())
+                    .build()
+                    .parseClaimsJws(token)
+                    .getBody();
+        } catch (JwtException | IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private Key signingKey() {
+        return Keys.hmacShaKeyFor(jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8));
     }
 
     private boolean isPathInWhiteList(String requestPath, String requestMethod, List<String> whitePathList) {

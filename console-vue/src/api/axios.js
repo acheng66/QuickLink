@@ -15,8 +15,10 @@ const http = axios.create({
 // 请求拦截 -->在请求发送之前做一些事情
 http.interceptors.request.use(
     (config) => {
-        config.headers.Token = isNotEmpty(getToken()) ? getToken() : ''
-        config.headers.Username = isNotEmpty(getUsername()) ? getUsername() : ''
+        const token = getToken()
+        if (isNotEmpty(token)) {
+            config.headers.Authorization = `Bearer ${token}`
+        }
         return config
     },
     (error) => {

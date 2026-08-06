@@ -25,9 +25,9 @@ export default {
     })
   },
   // 退出登录
-  logout(data) {
+  logout() {
     return http({
-      url: '/user/logout?token=' + data.token + '&username=' + data.username,
+      url: '/user/logout',
       method: 'delete'
     })
   },

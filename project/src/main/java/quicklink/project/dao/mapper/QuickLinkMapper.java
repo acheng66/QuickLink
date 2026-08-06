@@ -59,7 +59,9 @@ public interface QuickLinkMapper extends BaseMapper<QuickLinkDO> {
     /**
      * 获取重建开始时的最大雪花 ID，用作本轮扫描上界；重建期间新增数据由双写逻辑补入新过滤器。
      */
-    @Select("SELECT COALESCE(MAX(id), 0) FROM t_link")
+    // 保持聚合函数位于最外层，使 ShardingSphere 能合并各分表的 MAX 结果。
+    // 空表返回 null，调用方已按空结果处理。
+    @Select("SELECT MAX(id) FROM t_link")
     Long selectMaxIdForBloomRebuild();
 
     /**
